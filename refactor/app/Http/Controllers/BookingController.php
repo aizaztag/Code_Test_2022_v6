@@ -35,14 +35,24 @@ class BookingController extends Controller
      */
     public function index(Request $request)
     {
-        if($user_id = $request->get('user_id')) {
-
+        $current_user_type = $request->authenticatedUserr->user_type;
+        $adminRoleId = config('app.admin.role.id');
+        $superadminRoleId = config('app.superadmin.role.id');
+        $admin_roles = [$adminRoleId, $superadminRoleId];
+        if($request->has('user_id')) {
+            $user_id = $request->get('user_id');
             $response = $this->repository->getUsersJobs($user_id);
-
         }
-        elseif($request->authenticatedUser->user_type == env('ADMIN_ROLE_ID') || $request->__authenticatedUser->user_type == env('SUPERADMIN_ROLE_ID'))
-        {
+        elseif (in_array($current_user_type, $admin_roles)){
             $response = $this->repository->getAll($request);
+        }
+        $user_type_admin = config('app.role.admin');//admin
+        $user_type_superadmin = config('app.role.superadmin');//superadmin
+        if (Auth::check()) {
+            $user = Auth::user();
+            if(in_array( $user->role, [$user_type_admin , $user_type_superadmin])) {
+                $response = $this->repository->getAll($request);
+            }
         }
 
         return response($response);
@@ -54,8 +64,9 @@ class BookingController extends Controller
      */
     public function show($id)
     {
-        $job = $this->repository->with('translatorJobRel.user')->find($id);
-
+        $job = $this->repository->all();
+        //if translatorJobRel model is required
+        $job->load('translatorJobRel.user');
         return response($job);
     }
 
@@ -65,12 +76,24 @@ class BookingController extends Controller
      */
     public function store(Request $request)
     {
-        $data = $request->all();
-
-        $response = $this->repository->store($request->__authenticatedUser, $data);
-
-        return response($response);
-
+        //log here using try catch
+        try {
+            //good practice  validate it first
+            $validatedData = $request->validate(
+                [
+                    'booking' => 'required',
+                    'other_field' => 'required',
+                ]
+            );
+            //only save validated data
+            $response = $this->repository->store($request->__authenticatedUser, $validatedData);
+            Log::info('Model stored successfully.');
+            return redirect()->route('success')->with('message', 'Booking stored successfully.');
+        } catch (\Exception $e) {
+            // Log the error
+            Log::error('An error occurred while storing the model: ' . $e->getMessage());
+            return redirect()->route('error')->with('message', 'An error occurred while storing the booking.');
+        }
     }
 
     /**
@@ -80,11 +103,26 @@ class BookingController extends Controller
      */
     public function update($id, Request $request)
     {
-        $data = $request->all();
-        $cuser = $request->__authenticatedUser;
-        $response = $this->repository->updateJob($id, array_except($data, ['_token', 'submit']), $cuser);
-
-        return response($response);
+        //log here using try catch
+        try {
+            //good practice  validate it first
+            $validatedData = $request->validate(
+                [
+                    'translator_email' => 'required',
+                    'translator' => 'required',
+                    'due' => 'required',
+                ]
+            );
+            //only update validated data
+            $cuser = $request->__authenticatedUser;
+            $this->repository->updateJob($id, $validatedData, $cuser);
+            Log::info('Model stored successfully.');
+            return redirect()->route('success')->with('message', 'Booking updated successfully.');
+        } catch (\Exception $e) {
+            // Log the error
+            Log::error('An error occurred while updating the model: ' . $e->getMessage());
+            return redirect()->route('error')->with('message', 'An error occurred while updating the booking.');
+        }
     }
 
     /**
@@ -93,11 +131,8 @@ class BookingController extends Controller
      */
     public function immediateJobEmail(Request $request)
     {
-        $adminSenderEmail = config('app.adminemail');
         $data = $request->all();
-
         $response = $this->repository->storeJobEmail($data);
-
         return response($response);
     }
 
@@ -107,8 +142,9 @@ class BookingController extends Controller
      */
     public function getHistory(Request $request)
     {
-        if($user_id = $request->get('user_id')) {
+        $user_id = $request->input('user_id');
 
+        if ($user_id) {
             $response = $this->repository->getUsersJobsHistory($user_id, $request);
             return response($response);
         }
@@ -196,63 +232,28 @@ class BookingController extends Controller
     {
         $data = $request->all();
 
-        if (isset($data['distance']) && $data['distance'] != "") {
-            $distance = $data['distance'];
-        } else {
-            $distance = "";
-        }
-        if (isset($data['time']) && $data['time'] != "") {
-            $time = $data['time'];
-        } else {
-            $time = "";
-        }
-        if (isset($data['jobid']) && $data['jobid'] != "") {
-            $jobid = $data['jobid'];
-        }
+        $distance = isset($data['distance']) && $data['distance'] != "" ? $data['distance'] : "";
+        $time = isset($data['time']) && $data['time'] != "" ? $data['time'] : "";
+        $jobid = isset($data['jobid']) && $data['jobid'] != "" ? $data['jobid'] : "";
+        $session = isset($data['session_time']) && $data['session_time'] != "" ? $data['session_time'] : "";
 
-        if (isset($data['session_time']) && $data['session_time'] != "") {
-            $session = $data['session_time'];
-        } else {
-            $session = "";
-        }
+        $flagged = $data['flagged'] == 'true' ? 'yes' : 'no';
+        $manually_handled = $data['manually_handled'] == 'true' ? 'yes' : 'no';
+        $by_admin = $data['by_admin'] == 'true' ? 'yes' : 'no';
 
-        if ($data['flagged'] == 'true') {
-            if($data['admincomment'] == '') return "Please, add comment";
-            $flagged = 'yes';
-        } else {
-            $flagged = 'no';
-        }
-        
-        if ($data['manually_handled'] == 'true') {
-            $manually_handled = 'yes';
-        } else {
-            $manually_handled = 'no';
-        }
+        $admincomment = isset($data['admincomment']) && $data['admincomment'] != "" ? $data['admincomment'] : "";
 
-        if ($data['by_admin'] == 'true') {
-            $by_admin = 'yes';
-        } else {
-            $by_admin = 'no';
-        }
-
-        if (isset($data['admincomment']) && $data['admincomment'] != "") {
-            $admincomment = $data['admincomment'];
-        } else {
-            $admincomment = "";
-        }
         if ($time || $distance) {
-
-            $affectedRows = Distance::where('job_id', '=', $jobid)->update(array('distance' => $distance, 'time' => $time));
+            $affectedRows = Distance::where('job_id', $jobid)->update(['distance' => $distance, 'time' => $time]);
         }
 
         if ($admincomment || $session || $flagged || $manually_handled || $by_admin) {
-
-            $affectedRows1 = Job::where('id', '=', $jobid)->update(array('admin_comments' => $admincomment, 'flagged' => $flagged, 'session_time' => $session, 'manually_handled' => $manually_handled, 'by_admin' => $by_admin));
-
+            $affectedRows1 = Job::where('id', $jobid)->update(['admin_comments' => $admincomment, 'flagged' => $flagged, 'session_time' => $session, 'manually_handled' => $manually_handled, 'by_admin' => $by_admin]);
         }
 
         return response('Record updated!');
     }
+
 
     public function reopen(Request $request)
     {
@@ -290,5 +291,4 @@ class BookingController extends Controller
             return response(['success' => $e->getMessage()]);
         }
     }
-
 }
